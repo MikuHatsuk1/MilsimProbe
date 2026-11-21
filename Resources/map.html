@@ -2,80 +2,520 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   html, body, #map { height: 100%; margin: 0; padding: 0; }
-  .msg { padding: 16px; font-family: -apple-system, sans-serif; }
+  body { font-family: -apple-system, "PingFang SC", sans-serif; -webkit-user-select: none; user-select: none; }
+  .msg { padding: 16px; }
+  button { font-size: 14px; padding: 7px 10px; margin: 3px; border: 1px solid #888; border-radius: 6px; background: #f4f4f4; }
+  button.pb { display: block; margin-top: 6px; }
+  #hud { position: absolute; top: env(safe-area-inset-top, 0); left: 0; right: 0; z-index: 900; pointer-events: none; padding: 4px 56px 0 8px; }
+  #hud .row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 3px; }
+  .chip { background: rgba(0,0,0,.65); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 10px; }
+  .chip.red { background: #c62828; } .chip.blue { background: #1565c0; } .chip.warn { background: #ef6c00; } .chip.bad { background: #b71c1c; }
+  #hpbar { position: relative; height: 16px; background: rgba(0,0,0,.5); border-radius: 8px; overflow: hidden; width: 70%; }
+  #hpfill { height: 100%; background: #43a047; width: 100%; }
+  #hptxt { position: absolute; left: 8px; top: 0; font-size: 11px; line-height: 16px; color: #fff; }
+  #stats { margin-top: 3px; font-size: 12px; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+  #fab { position: absolute; left: 8px; bottom: 30px; z-index: 950; padding: 10px 16px; font-size: 15px; background: #263238; color: #fff; border-radius: 22px; }
+  #quick { position: absolute; left: 90px; bottom: 30px; z-index: 950; }
+  #quick button { background: #fff; padding: 10px 12px; }
+  #sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 62%; overflow-y: auto; z-index: 1000; background: #fff; border-radius: 14px 14px 0 0; box-shadow: 0 -2px 10px rgba(0,0,0,.4); padding: 10px 10px 20px; -webkit-user-select: none; }
+  #sheet h4 { margin: 10px 0 4px; font-size: 13px; color: #555; }
+  #dlg { position: absolute; inset: 0; z-index: 1100; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  #dlgBox { background: #fff; border-radius: 12px; padding: 14px; width: 82%; max-width: 360px; max-height: 80%; overflow-y: auto; }
+  #dlgBox label { display: block; font-size: 13px; margin-top: 8px; color: #333; }
+  #dlgBox input, #dlgBox select { width: 100%; box-sizing: border-box; font-size: 16px; padding: 6px; margin-top: 2px; }
+  #dlgErr { color: #c62828; font-size: 12px; min-height: 16px; margin-top: 6px; }
+  #hint { position: absolute; left: 8px; right: 8px; bottom: 80px; z-index: 960; background: #fff8e1; border: 1px solid #ffb300; border-radius: 8px; padding: 8px; font-size: 14px; }
+  #toast { position: absolute; left: 8px; right: 8px; top: 96px; z-index: 970; pointer-events: none; }
+  #toast div { background: rgba(0,0,0,.75); color: #fff; font-size: 13px; padding: 5px 10px; border-radius: 8px; margin-bottom: 3px; display: inline-block; }
+  .tt { background: rgba(255,255,255,.8); border: none; box-shadow: none; font-size: 12px; font-weight: bold; }
+  .selfDot { width: 18px; height: 18px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 4px #000; }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<script>
-var map = null, selfMarker = null, accCircle = null, track = null, follow = true;
 
-function post(msg) {
-  try { window.webkit.messageHandlers.native.postMessage(msg); } catch (e) {}
+<div id="hud">
+  <div class="row" id="chips"></div>
+  <div id="hpbar"><div id="hpfill"></div><span id="hptxt"></span></div>
+  <div id="stats"></div>
+</div>
+<div id="toast"></div>
+<div id="hint" hidden></div>
+<button id="fab">功能</button>
+<div id="quick"><button id="qHit">中弹</button><button id="qBand">绷带</button></div>
+<div id="sheet" hidden></div>
+<div id="dlg" hidden><div id="dlgBox"><div id="dlgTitle" style="font-weight:bold;font-size:16px"></div><div id="dlgBody"></div><div id="dlgErr"></div><div style="text-align:right;margin-top:8px"><button id="dlgCancel">取消</button><button id="dlgOk" style="background:#1565c0;color:#fff">确定</button></div></div></div>
+
+<script>
+// ============ 基础工具 ============
+function $(id) { return document.getElementById(id); }
+function post(m) { try { window.webkit.messageHandlers.native.postMessage(m); } catch (e) {} }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+var ROLES = ["步枪兵","班用机枪","精确射手","狙击手","医疗兵","突击手","通用机枪","警卫","卡车","坦克","步战车","装输","侦察无人机","投弹无人机","穿越无人机","机器狼"];
+var TEAM = ["红队", "蓝队"];
+var TCOLOR = ["#e53935", "#1e88e5"];
+var VIS_TXT = ["红方", "蓝方", "双方", "仅导演部"];
+var BOMB_TPL = [{ n: "自定义", r: 40, d: 50, p: 100 }, { n: "105榴", r: 25, d: 60, p: 100 }, { n: "155榴", r: 40, d: 80, p: 100 }, { n: "航弹", r: 60, d: 100, p: 100 }];
+var DROP_TPL = [{ n: "自定义", r: 40, v: 20 }, { n: "小投", r: 20, v: 10 }, { n: "中投", r: 30, v: 20 }, { n: "大投", r: 40, v: 40 }];
+
+function dist(a, b) {
+  var p = Math.PI / 180, dLa = (b.lat - a.lat) * p, dLn = (b.lng - a.lng) * p;
+  var h = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(a.lat * p) * Math.cos(b.lat * p) * Math.sin(dLn / 2) * Math.sin(dLn / 2);
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+// 射线法：点是否在多边形内（坐标间隔小，按平面处理）
+function inPoly(pt, pts) {
+  var x = pt.lng, y = pt.lat, inside = false;
+  for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    var xi = pts[i].lng, yi = pts[i].lat, xj = pts[j].lng, yj = pts[j].lat;
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+// 四个点是否按顺序围成凸四边形（相邻边叉积符号一致）
+function orderedQuad(p) {
+  var pos = 0, neg = 0;
+  for (var i = 0; i < 4; i++) {
+    var a = p[i], b = p[(i + 1) % 4], c = p[(i + 2) % 4];
+    var cr = (b.lng - a.lng) * (c.lat - b.lat) - (b.lat - a.lat) * (c.lng - b.lng);
+    if (cr > 0) pos++; else if (cr < 0) neg++;
+  }
+  return (pos === 4 || neg === 4);
 }
 
+// ============ 状态 ============
+var me = { team: 0, role: 0, squad: 1, hp: 100, maxHp: 100, bleed: false, bt: 0, ammo: 100, kit: 100, band: 100,
+           regroup: 9, dead: false, banned: false, sim: false, pos: null, acc: 0, lastFix: 0, gpsFault: false, hasQuest: null };
+var mode = "player";   // player / leader / admin
+var objs = { mines: [], forts: [], bombs: [], drops: [], helis: [], bases: [], depots: [], quests: [], marks: [] };
+var tool = null;       // 正在放置的东西
+var map = null, G = null, selfMarker = null, accCircle = null, track = null, grid = null, follow = true, showGrid = false;
+
+function toast(t) {
+  var d = document.createElement("div"); d.textContent = t;
+  var w = document.createElement("div"); w.appendChild(d); $("toast").appendChild(w);
+  setTimeout(function () { if (w.parentNode) w.parentNode.removeChild(w); }, 4000);
+  while ($("toast").children.length > 4) $("toast").removeChild($("toast").firstChild);
+}
+function say(t) { toast(t); post({ type: "speak", text: t }); post({ type: "log", text: t }); }
+
+// ============ 对话框 ============
+// fields: [{k,label,type:'number'|'select',val,min,max,opts:[[v,label]],onchange(set)}]
+function ask(title, fields, ok) {
+  $("dlgTitle").textContent = title; $("dlgErr").textContent = "";
+  var body = $("dlgBody"); body.innerHTML = "";
+  var els = {};
+  function set(k, v) { if (els[k]) els[k].value = v; }
+  fields.forEach(function (f) {
+    var lab = document.createElement("label"); lab.textContent = f.label;
+    var el;
+    if (f.type === "select") {
+      el = document.createElement("select");
+      f.opts.forEach(function (o) { var op = document.createElement("option"); op.value = o[0]; op.textContent = o[1]; el.appendChild(op); });
+    } else {
+      el = document.createElement("input"); el.type = "number"; el.inputMode = "numeric";
+      if (f.min !== undefined) el.min = f.min; if (f.max !== undefined) el.max = f.max;
+      if (f.min !== undefined && f.max !== undefined) lab.textContent += "（" + f.min + "~" + f.max + "）";
+    }
+    el.value = f.val; els[f.k] = el;
+    if (f.onchange) el.onchange = function () { f.onchange(set); };
+    lab.appendChild(el); body.appendChild(lab);
+  });
+  $("dlg").hidden = false;
+  $("dlgCancel").onclick = function () { $("dlg").hidden = true; };
+  $("dlgOk").onclick = function () {
+    var out = {};
+    for (var i = 0; i < fields.length; i++) {
+      var f = fields[i], v = Number(els[f.k].value);
+      if (isNaN(v) || els[f.k].value === "") { $("dlgErr").textContent = "请填写：" + f.label; return; }
+      if (f.type !== "select" && ((f.min !== undefined && v < f.min) || (f.max !== undefined && v > f.max))) { $("dlgErr").textContent = f.label + "超出范围"; return; }
+      out[f.k] = v;
+    }
+    $("dlg").hidden = true; ok(out);
+  };
+}
+function sel(arr) { return arr.map(function (t, i) { return [i, t]; }); }
+
+// ============ 放置工具 ============
+function startTool(type, params, need, text) {
+  tool = { type: type, p: params, pts: [], need: need, text: text };
+  closeSheet(); updateHint();
+}
+function updateHint() {
+  var h = $("hint");
+  if (!tool) { h.hidden = true; return; }
+  h.hidden = false; h.innerHTML = "";
+  var s = document.createElement("span");
+  s.textContent = tool.text + (tool.need > 1 ? "（第 " + (tool.pts.length + 1) + "/" + tool.need + " 个点，按顺时针或逆时针）" : "：点击地图");
+  var b = document.createElement("button"); b.textContent = "取消";
+  b.onclick = function () { tool = null; updateHint(); render(); };
+  h.appendChild(s); h.appendChild(b);
+}
+function onMapClick(e) {
+  if (tool) {
+    tool.pts.push(e.latlng);
+    if (tool.pts.length < tool.need) { updateHint(); render(); return; }
+    finishTool(); return;
+  }
+  if (me.sim) setSelf(e.latlng, 5);
+}
+function finishTool() {
+  var t = tool, p = t.p, c = t.pts[0]; tool = null; updateHint();
+  if ((t.type === "mine" || t.type === "fort") && !orderedQuad(t.pts)) { toast("图形不合法：四个点要按顺序围成四边形"); render(); return; }
+  switch (t.type) {
+    case "mine": objs.mines.push({ pts: t.pts, dmg: p.dmg, vis: p.vis, inside: false }); break;
+    case "fort": objs.forts.push({ pts: t.pts, team: p.team, percent: p.percent, bomb: p.bomb, weapon: p.weapon }); break;
+    case "bomb": doBomb({ c: c, r: p.r, d: p.d, p: p.p, src: p.src, exp: Date.now() + 30000 }); break;
+    case "drop": objs.drops.push({ c: c, r: p.r, v: p.v, src: p.src, taken: false, exp: Date.now() + 120000 }); break;
+    case "heli": objs.helis.push({ c: c, r: p.r, v: p.v, team: p.team, revive: p.revive, inside: false, exp: Date.now() + 120000 }); break;
+    case "base": objs.bases.push({ c: c, r: p.r, team: p.team, limit: p.limit, life: p.limit, supply: 0, truckCD: p.truckCD }); break;
+    case "depot": objs.depots.push({ c: c, r: p.r, team: p.team, hp: p.hp, maxHp: p.hp }); break;
+    case "quest": objs.quests.push({ c: c, team: p.team, vis: p.vis, pickedVis: p.pickedVis, holder: false }); break;
+    case "mark": objs.marks.push({ c: c, kind: p.kind, enemy: p.enemy, team: me.team, squad: p.squadVis, by: me.squad }); break;
+  }
+  render();
+}
+
+// ============ 规则（沙盒版，数值为自拟） ============
+function fortAt(pos) {
+  var best = { percent: 0, bomb: 0, weapon: 0 };
+  objs.forts.forEach(function (f) {
+    if ((f.team === 2 || f.team === me.team) && inPoly(pos, f.pts)) {
+      best.percent = Math.max(best.percent, f.percent); best.bomb = Math.max(best.bomb, f.bomb); best.weapon = Math.max(best.weapon, f.weapon);
+    }
+  });
+  return best;
+}
+function hurt(n, why, setBleed) {
+  if (me.dead || me.banned || n <= 0) return;
+  me.hp = Math.max(0, Math.round(me.hp - n));
+  if (setBleed && me.hp > 0) me.bleed = true;
+  say(why + "，血值 " + me.hp);
+  if (me.hp <= 0) die();
+  hud();
+}
+function die() {
+  me.dead = true; me.bleed = false; say("你已阵亡");
+  if (me.hasQuest !== null) dropQuest();
+  hud();
+}
+function revive(why) {
+  if (!me.dead || me.banned) return;
+  me.dead = false; me.hp = me.maxHp; me.bleed = false; me.ammo = 100; me.kit = 100;
+  say("已复活（" + why + "）"); hud();
+}
+function doBomb(b) {
+  objs.bombs.push(b);
+  if (!me.pos || me.dead || dist(me.pos, b.c) > b.r) { if (me.pos && !me.dead) toast("轰炸落点距你 " + Math.round(dist(me.pos, b.c)) + " 米，不在范围"); return; }
+  var f = fortAt(me.pos);
+  var pct = b.p * (1 - f.percent / 100), dmg = b.d * (1 - f.bomb / 10);
+  if (Math.random() * 100 < pct) hurt(dmg, "被轰炸命中", true); else say("轰炸范围内，幸免");
+}
+function hit() { // 模拟中弹
+  var f = me.pos ? fortAt(me.pos) : { weapon: 0 };
+  hurt(20 * (1 - f.weapon / 10), "中弹", me.hp <= 50);
+}
+function useBandage() {
+  if (me.dead) return toast("已阵亡");
+  if (!me.bleed) return toast("没有在流血");
+  if (me.band < 20) return toast("绷带不足");
+  me.band -= 20; me.bleed = false; say("已包扎，止血"); hud();
+}
+function dropQuest() {
+  var q = objs.quests[me.hasQuest]; if (!q) { me.hasQuest = null; return; }
+  q.holder = false; if (me.pos) q.c = L.latLng(me.pos.lat, me.pos.lng);
+  me.hasQuest = null; say("放下任务道具"); render();
+}
+
+function tick() {
+  var now = Date.now();
+  me.gpsFault = !me.sim && me.lastFix > 0 && (now - me.lastFix > 15000);
+  // 到期清理
+  var before = objs.bombs.length + objs.drops.length + objs.helis.length;
+  objs.bombs = objs.bombs.filter(function (x) { return x.exp > now; });
+  objs.drops = objs.drops.filter(function (x) { return x.exp > now && !x.taken; });
+  objs.helis = objs.helis.filter(function (x) { return x.exp > now; });
+  if (before !== objs.bombs.length + objs.drops.length + objs.helis.length) render();
+
+  if (me.pos && !me.banned) {
+    if (!me.dead) {
+      if (me.bleed && ++me.bt % 3 === 0) hurt(1, "流血", false);
+      objs.mines.forEach(function (m) {
+        var inside = inPoly(me.pos, m.pts);
+        if (inside && !m.inside) hurt(m.dmg, "踩中地雷", true);
+        m.inside = inside;
+      });
+      objs.drops.forEach(function (d) {
+        if (!d.taken && dist(me.pos, d.c) <= d.r) { d.taken = true; me.ammo = 100; me.kit = 100; say("拾取空投，弹药和物资补满"); render(); }
+      });
+      objs.quests.forEach(function (q, i) {
+        if (!q.holder && me.hasQuest === null && (q.team === 2 || q.team === me.team) && dist(me.pos, q.c) <= 10) {
+          q.holder = true; me.hasQuest = i; say("拾取任务道具"); render();
+        }
+      });
+    }
+    objs.helis.forEach(function (h) {
+      var inside = dist(me.pos, h.c) <= h.r;
+      if (inside && !h.inside && h.team === me.team) {
+        me.regroup = Math.min(15, me.regroup + h.v); say("机降：队复 +" + h.v + "，现有 " + me.regroup);
+        if (me.dead && h.revive) revive("机降");
+      }
+      h.inside = inside;
+    });
+    objs.bases.forEach(function (b) {
+      if (b.team !== me.team || dist(me.pos, b.c) > b.r) return;
+      if (me.dead) {
+        if (b.limit === 0 || b.life > 0) { if (b.limit !== 0) b.life--; revive("基地"); render(); }
+      } else if (me.ammo < 100 || me.kit < 100 || me.band < 100) {
+        me.ammo = Math.min(100, me.ammo + 10); me.kit = Math.min(100, me.kit + 10); me.band = Math.min(100, me.band + 10);
+        if (me.ammo === 100 && me.kit === 100 && me.band === 100) say("基地补给完成");
+      }
+    });
+  }
+  hud();
+}
+
+// ============ 画面 ============
+function hud() {
+  var c = $("chips"); c.innerHTML = "";
+  function chip(t, cls) { var s = document.createElement("span"); s.className = "chip " + (cls || ""); s.textContent = t; c.appendChild(s); }
+  chip(TEAM[me.team], me.team ? "blue" : "red"); chip(ROLES[me.role]);
+  chip({ player: "玩家", leader: me.squad === 0 ? "指挥" : me.squad + "小队队长", admin: "导演部" }[mode]);
+  if (me.sim) chip("模拟定位", "warn");
+  if (me.gpsFault) chip("定位故障", "bad");
+  if (me.banned) chip("禁赛中", "bad"); else if (me.dead) chip("阵亡", "bad");
+  if (me.bleed) chip("流血中", "bad");
+  $("hpfill").style.width = (me.hp / me.maxHp * 100) + "%";
+  $("hpfill").style.background = me.hp / me.maxHp > .5 ? "#43a047" : me.hp / me.maxHp > .25 ? "#fb8c00" : "#e53935";
+  $("hptxt").textContent = "血值 " + me.hp + "/" + me.maxHp;
+  $("stats").textContent = "弹药 " + me.ammo + "%  物资 " + me.kit + "%  绷带 " + me.band + "%  队复 " + me.regroup + (me.hasQuest !== null ? "  [持有任务道具]" : "");
+}
+
+function box(lines, btns) {
+  var d = document.createElement("div");
+  lines.forEach(function (t) { var p = document.createElement("div"); p.textContent = t; d.appendChild(p); });
+  (btns || []).forEach(function (b) {
+    var x = document.createElement("button"); x.className = "pb"; x.textContent = b[0];
+    x.onclick = function () { map.closePopup(); b[1](); }; d.appendChild(x);
+  });
+  return d;
+}
+function del(list, o) { objs[list] = objs[list].filter(function (x) { return x !== o; }); render(); }
+function label(layer, text) { layer.bindTooltip(text, { permanent: true, direction: "center", className: "tt" }); }
+
+function render() {
+  if (!map) return;
+  G.clearLayers();
+  var adm = mode === "admin", T = me.team;
+  var rm = adm ? function (list, o) { return [["删除", function () { del(list, o); }]]; } : function () { return []; };
+
+  objs.mines.forEach(function (m) {
+    if (!adm && !(m.vis === 2 || m.vis === T)) return;
+    var p = L.polygon(m.pts, { color: "#6d4c41", weight: 2, fillOpacity: .3 }).addTo(G);
+    label(p, "雷区"); p.bindPopup(box(["雷区", "伤害值：" + m.dmg, "可见：" + VIS_TXT[m.vis]], rm("mines", m)));
+  });
+  objs.forts.forEach(function (f) {
+    if (!adm && !(f.team === 2 || f.team === T)) return;
+    var p = L.polygon(f.pts, { color: f.team === 2 ? "#546e7a" : TCOLOR[f.team], weight: 2, dashArray: "6", fillOpacity: .15 }).addTo(G);
+    var title = f.team === 2 ? "工事" : TEAM[f.team] + "单向工事";
+    label(p, title);
+    p.bindPopup(box([title, "轰炸杀伤机率减少：" + f.percent + "%", "轰炸减伤：" + f.bomb * 10 + "%", "武器减伤：" + f.weapon * 10 + "%"], rm("forts", f)));
+  });
+  objs.bombs.forEach(function (b) {
+    var p = L.circle(b.c, { radius: b.r, color: "#d84315", weight: 2, fillOpacity: .2 }).addTo(G);
+    label(p, "轰炸"); p.bindPopup(box(["轰炸", "伤害值：" + b.d, "杀伤机率：" + b.p + "%", "来源：" + b.src]));
+  });
+  objs.drops.forEach(function (d) {
+    var p = L.circle(d.c, { radius: d.r, color: "#2e7d32", weight: 2, fillOpacity: .2 }).addTo(G);
+    label(p, "空投"); p.bindPopup(box(["空投", "物资量：" + d.v, "来源：" + d.src]));
+  });
+  objs.helis.forEach(function (h) {
+    if (!adm && h.team !== T) return;
+    var p = L.circle(h.c, { radius: h.r, color: TCOLOR[h.team], weight: 2, fillOpacity: .15 }).addTo(G);
+    label(p, "机降"); p.bindPopup(box(["机降", "队复量：" + h.v, "队伍：" + TEAM[h.team], h.revive ? "可复活" : "不可复活"]));
+  });
+  objs.bases.forEach(function (b) {
+    if (!adm && b.team !== T) return;
+    var p = L.circle(b.c, { radius: b.r, color: TCOLOR[b.team], weight: 3, fillOpacity: .1 }).addTo(G);
+    var st = b.limit === 0 ? "命数：无限" : "命数：" + b.life + "/" + b.limit;
+    label(p, "基地");
+    var btns = [];
+    if (adm) {
+      btns.push(["加命", function () { ask("加命", [{ k: "n", label: "加多少命", type: "number", val: 10, min: 1, max: 65000 }], function (v) { b.life = b.limit === 0 ? 0 : Math.min(b.limit, b.life + v.n); render(); }); }]);
+      btns.push(["加物资", function () { ask("加物资", [{ k: "n", label: "加多少物资", type: "number", val: 10, min: 1, max: 65000 }], function (v) { b.supply += v.n; render(); }); }]);
+      btns.push(["重置", function () { b.life = b.limit; b.supply = 0; render(); }]);
+      btns.push(["删除", function () { del("bases", b); }]);
+    }
+    p.bindPopup(box(["基地：" + TEAM[b.team], st, "物资：" + b.supply, "后勤CD：" + (b.truckCD ? b.truckCD + "秒" : "关闭")], btns));
+  });
+  objs.depots.forEach(function (d) {
+    if (!adm && d.team !== T) return;
+    var p = L.circle(d.c, { radius: d.r, color: TCOLOR[d.team], weight: 2, dashArray: "3 6", fillOpacity: .1 }).addTo(G);
+    label(p, "兵站");
+    var btns = adm ? [["恢复血条", function () { d.hp = d.maxHp; render(); }], ["删除", function () { del("depots", d); }]] : [];
+    p.bindPopup(box(["兵站：" + TEAM[d.team], "血条：" + d.hp + "/" + d.maxHp], btns));
+  });
+  objs.quests.forEach(function (q, i) {
+    var pos = q.holder && me.pos ? me.pos : q.c;
+    var mine = (q.team === 2 || q.team === T);
+    if (!adm && !mine && !(q.holder && q.pickedVis)) {
+      if (!me.pos || dist(me.pos, pos) > q.vis) return;
+    }
+    var mk = L.marker(pos, { icon: L.divIcon({ html: "★", className: "", iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(G);
+    mk.bindPopup(box(["任务道具" + (i + 1), "可拾取队伍：" + (q.team === 2 ? "双方" : TEAM[q.team]), "可见距离：" + q.vis + "米", "持有：" + (q.holder ? "有" : "无")], rm("quests", q)));
+  });
+  objs.marks.forEach(function (m) {
+    if (!adm && m.team !== T) return;
+    if (!adm && m.squad !== 0 && m.squad !== me.squad && mode !== "leader") return;
+    var col = m.enemy ? "#c62828" : "#2e7d32";
+    var mk = L.marker(m.c, { icon: L.divIcon({ html: '<div style="background:' + col + ';color:#fff;border-radius:6px;padding:2px 6px;font-size:12px;white-space:nowrap">' + m.kind + "</div>", className: "", iconAnchor: [20, 10] }) }).addTo(G);
+    var who = m.by === 0 ? "指挥" : m.by + "小队队长";
+    var canDel = adm || (mode === "leader" && m.by === me.squad);
+    mk.bindPopup(box([who + "标记：" + m.kind, "可见：" + (m.squad === 0 ? "全队" : m.squad + "小队")], canDel ? [["删除", function () { del("marks", m); }]] : []));
+  });
+  // 放置中的临时点
+  if (tool) tool.pts.forEach(function (pt) { L.circleMarker(pt, { radius: 5, color: "#000", fillColor: "#ff0", fillOpacity: 1 }).addTo(G); });
+  drawGrid();
+}
+
+function drawGrid() {
+  if (!grid) return;
+  grid.clearLayers();
+  if (!showGrid) return;
+  var b = map.getBounds(), lat0 = (b.getNorth() + b.getSouth()) / 2;
+  var dLat = 100 / 111320, dLng = 100 / (111320 * Math.cos(lat0 * Math.PI / 180));
+  var n = 0, st = { color: "#000", weight: 1, opacity: .35, interactive: false };
+  for (var la = Math.ceil(b.getSouth() / dLat) * dLat; la < b.getNorth() && n < 80; la += dLat, n++)
+    L.polyline([[la, b.getWest()], [la, b.getEast()]], st).addTo(grid);
+  for (var lo = Math.ceil(b.getWest() / dLng) * dLng; lo < b.getEast() && n < 160; lo += dLng, n++)
+    L.polyline([[b.getSouth(), lo], [b.getNorth(), lo]], st).addTo(grid);
+}
+
+// ============ 菜单 ============
+function closeSheet() { $("sheet").hidden = true; }
+function openSheet() {
+  var s = $("sheet"); s.innerHTML = ""; s.hidden = false;
+  function h(t) { var e = document.createElement("h4"); e.textContent = t; s.appendChild(e); }
+  function b(t, fn) { var e = document.createElement("button"); e.textContent = t; e.onclick = fn; s.appendChild(e); }
+  function br() { s.appendChild(document.createElement("br")); }
+
+  h("我");
+  b("队伍/兵种", function () {
+    closeSheet();
+    ask("队伍与兵种", [
+      { k: "team", label: "队伍", type: "select", opts: sel(TEAM), val: me.team },
+      { k: "role", label: "兵种", type: "select", opts: sel(ROLES), val: me.role },
+      { k: "maxHp", label: "血值上限", type: "number", val: me.maxHp, min: 1, max: 999 }
+    ], function (v) { me.team = v.team; me.role = v.role; me.maxHp = v.maxHp; me.hp = Math.min(me.hp, me.maxHp); render(); hud(); });
+  });
+  b("模式：" + { player: "玩家", leader: "队长", admin: "导演部" }[mode], function () {
+    closeSheet();
+    ask("切换模式", [
+      { k: "m", label: "模式（队长/导演部的功能只在本机生效）", type: "select", opts: [[0, "玩家"], [1, "队长"], [2, "导演部"]], val: ["player", "leader", "admin"].indexOf(mode) },
+      { k: "sq", label: "队长身份（0=指挥，1~8=小队）", type: "number", val: me.squad, min: 0, max: 8 }
+    ], function (v) { mode = ["player", "leader", "admin"][v.m]; me.squad = v.sq; render(); hud(); });
+  });
+  br();
+  b(me.sim ? "关闭模拟定位" : "开启模拟定位（点地图移动自己）", function () { me.sim = !me.sim; if (me.sim) toast("点地图即可把自己移到那里"); hud(); openSheet(); });
+  b(showGrid ? "隐藏网格" : "显示100米网格", function () { showGrid = !showGrid; drawGrid(); openSheet(); });
+  b("回到自己", function () { recenter(); closeSheet(); });
+  b("补满状态/复活", function () { me.dead = false; me.banned = false; me.hp = me.maxHp; me.bleed = false; me.ammo = me.kit = me.band = 100; hud(); closeSheet(); });
+  if (me.hasQuest !== null) b("放下任务道具", function () { dropQuest(); closeSheet(); });
+
+  if (mode === "leader") {
+    h("队长：标记敌方");
+    ["敌步兵", "敌车辆", "敌火炮", "敌无人机", "敌据点"].forEach(function (k) { b(k, function () { leaderMark(k, true); }); });
+    h(me.squad === 0 ? "指挥标记" : "小队标记");
+    ["集结点", "进攻", "防守", "医疗点", "补给点"].forEach(function (k) { b(k, function () { leaderMark(k, false); }); });
+  }
+  if (mode === "admin") {
+    h("导演部：放置");
+    b("雷区", function () { closeSheet(); ask("雷区", [{ k: "dmg", label: "触雷伤害值", type: "number", val: 50, min: 1, max: 999 }, { k: "vis", label: "谁可见", type: "select", opts: sel(VIS_TXT), val: 3 }], function (v) { startTool("mine", v, 4, "放置雷区"); }); });
+    b("工事", function () { closeSheet(); ask("工事", [{ k: "team", label: "队伍", type: "select", opts: [[0, "红队"], [1, "蓝队"], [2, "双方"]], val: 2 }, { k: "percent", label: "轰炸杀伤机率减少 %", type: "number", val: 50, min: 0, max: 100 }, { k: "bomb", label: "轰炸减伤（×10%）", type: "number", val: 5, min: 0, max: 10 }, { k: "weapon", label: "武器减伤（×10%）", type: "number", val: 5, min: 0, max: 10 }], function (v) { startTool("fort", v, 4, "放置工事"); }); });
+    b("轰炸", function () {
+      closeSheet();
+      var tplCh = function (set) { var t = BOMB_TPL[Number($("dlgBody").querySelector("select").value)]; set("r", t.r); set("d", t.d); set("p", t.p); };
+      ask("轰炸", [{ k: "tpl", label: "模板", type: "select", opts: BOMB_TPL.map(function (t, i) { return [i, t.n]; }), val: 0, onchange: tplCh }, { k: "r", label: "半径（米）", type: "number", val: 40, min: 1, max: 999 }, { k: "d", label: "伤害值", type: "number", val: 50, min: 1, max: 999 }, { k: "p", label: "杀伤机率 %", type: "number", val: 100, min: 1, max: 100 }],
+        function (v) { v.src = "导演部"; startTool("bomb", v, 1, "放置轰炸"); });
+    });
+    b("空投", function () {
+      closeSheet();
+      var tplCh = function (set) { var t = DROP_TPL[Number($("dlgBody").querySelector("select").value)]; set("r", t.r); set("v", t.v); };
+      ask("空投", [{ k: "tpl", label: "模板", type: "select", opts: DROP_TPL.map(function (t, i) { return [i, t.n]; }), val: 0, onchange: tplCh }, { k: "r", label: "半径（米）", type: "number", val: 40, min: 1, max: 999 }, { k: "v", label: "物资数量", type: "number", val: 20, min: 1, max: 999 }],
+        function (v) { v.src = "导演部"; startTool("drop", v, 1, "放置空投"); });
+    });
+    b("机降", function () { closeSheet(); ask("机降", [{ k: "r", label: "区域半径（米）", type: "number", val: 40, min: 1, max: 999 }, { k: "team", label: "限定队伍", type: "select", opts: sel(TEAM), val: 0 }, { k: "v", label: "队复命数", type: "number", val: 9, min: 1, max: 15 }, { k: "revive", label: "可复活", type: "select", opts: [[1, "可复活"], [0, "不可复活"]], val: 1 }], function (v) { startTool("heli", v, 1, "放置机降区"); }); });
+    br();
+    b("基地", function () { closeSheet(); ask("基地", [{ k: "r", label: "半径（米）", type: "number", val: 25, min: 10, max: 240 }, { k: "team", label: "基地队伍", type: "select", opts: sel(TEAM), val: 0 }, { k: "limit", label: "命数上限（0为无限）", type: "number", val: 0, min: 0, max: 65000 }, { k: "truckCD", label: "后勤CD秒（0关闭）", type: "number", val: 0, min: 0, max: 65000 }], function (v) { startTool("base", v, 1, "放置基地"); }); });
+    b("兵站", function () { closeSheet(); ask("兵站", [{ k: "r", label: "半径（米）", type: "number", val: 25, min: 10, max: 240 }, { k: "team", label: "兵站队伍", type: "select", opts: sel(TEAM), val: 0 }, { k: "hp", label: "血条", type: "number", val: 200, min: 10, max: 65000 }], function (v) { startTool("depot", v, 1, "放置兵站"); }); });
+    b("任务道具", function () { closeSheet(); ask("任务道具", [{ k: "team", label: "可拾取队伍", type: "select", opts: [[0, "红队"], [1, "蓝队"], [2, "双方"]], val: 2 }, { k: "vis", label: "对敌方可见距离（米）", type: "number", val: 50, min: 0, max: 999 }, { k: "pickedVis", label: "拾取后敌方仍可见", type: "select", opts: [[0, "否"], [1, "是"]], val: 0 }], function (v) { startTool("quest", v, 1, "放置任务道具"); }); });
+    br();
+    b("清除全部", function () { objs = { mines: [], forts: [], bombs: [], drops: [], helis: [], bases: [], depots: [], quests: [], marks: [] }; me.hasQuest = null; render(); closeSheet(); });
+  }
+  br(); b("关闭", closeSheet);
+}
+function leaderMark(kind, enemy) {
+  closeSheet();
+  var f = me.squad === 0 ? [{ k: "squadVis", label: "谁可见（0=全队，1~8=某小队）", type: "number", val: 0, min: 0, max: 8 }] : [];
+  var go = function (v) { startTool("mark", { kind: kind, enemy: enemy, squadVis: v.squadVis === undefined ? me.squad : v.squadVis }, 1, "放置标记：" + kind); };
+  if (f.length) ask("标记：" + kind, f, go); else go({});
+}
+
+// ============ 位置 ============
+function setSelf(ll, acc) {
+  me.pos = L.latLng(ll.lat, ll.lng); me.acc = acc;
+  if (!selfMarker) {
+    selfMarker = L.marker(me.pos, { icon: L.divIcon({ className: "", html: '<div class="selfDot" id="selfDot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), zIndexOffset: 1000 }).addTo(map);
+    accCircle = L.circle(me.pos, { radius: acc, weight: 1, color: "#1e88e5", fillOpacity: .1, interactive: false }).addTo(map);
+    map.setView(me.pos, 17);
+  } else {
+    selfMarker.setLatLng(me.pos); accCircle.setLatLng(me.pos); accCircle.setRadius(acc);
+    if (follow) map.panTo(me.pos);
+  }
+  var d = $("selfDot"); if (d) d.style.background = TCOLOR[me.team];
+  track.addLatLng(me.pos);
+  if (objs.quests.length && me.hasQuest !== null) render();
+}
+// 原生 → JS
+function updateSelf(lat, lng, acc) {
+  me.lastFix = Date.now();
+  if (me.sim) return;
+  setSelf({ lat: lat, lng: lng }, Math.max(acc, 3));
+}
+function clearMarks() { objs.marks = []; render(); }   // 原生“清除标记”按钮调用：清掉队长标记
+function recenter() { follow = true; if (map && me.pos) map.setView(me.pos, Math.max(map.getZoom(), 16)); }
+function clearTrack() { if (track) track.setLatLngs([]); }
+
+// ============ 初始化 ============
 function init() {
-  if (typeof L === 'undefined') {
+  if (typeof L === "undefined") {
     document.body.innerHTML = '<p class="msg">地图库加载失败，请检查网络后重开 App。</p>';
-    post({ type: 'error', text: 'Leaflet 加载失败（网络问题？）' });
+    post({ type: "error", text: "Leaflet 加载失败（网络问题？）" });
     return;
   }
-  map = L.map('map', { zoomControl: true }).setView([1.3521, 103.8198], 12);
-
-  var street = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors'
-  }).addTo(map);
-  var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 19, attribution: '&copy; Esri'
-  });
-  L.control.layers({ '街道': street, '卫星': sat }).addTo(map);
-
-  track = L.polyline([], { color: '#e53935', weight: 3 }).addTo(map);
-
-  map.on('dragstart', function () { follow = false; });
-  map.on('click', function (e) {
-    L.marker(e.latlng).addTo(map)
-      .bindPopup('标记 ' + e.latlng.lat.toFixed(5) + ', ' + e.latlng.lng.toFixed(5))
-      .openPopup();
-    post({ type: 'mark', lat: e.latlng.lat, lng: e.latlng.lng });
-  });
-
-  post({ type: 'ready' });
+  map = L.map("map", { zoomControl: false }).setView([1.3521, 103.8198], 12);
+  var street = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
+  var sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "&copy; Esri" });
+  L.control.layers({ "街道": street, "卫星": sat }, null, { position: "topright" }).addTo(map);
+  L.control.scale({ position: "bottomright", imperial: false }).addTo(map);
+  G = L.layerGroup().addTo(map); grid = L.layerGroup().addTo(map);
+  track = L.polyline([], { color: "#e53935", weight: 3, interactive: false }).addTo(map);
+  map.on("dragstart", function () { follow = false; });
+  map.on("click", onMapClick);
+  map.on("moveend", drawGrid);
+  $("fab").onclick = function () { $("sheet").hidden ? openSheet() : closeSheet(); };
+  $("qHit").onclick = hit; $("qBand").onclick = useBandage;
+  setInterval(tick, 1000);
+  hud(); render();
+  post({ type: "ready" });
 }
-
-// 原生 → JS：更新自己的位置
-function updateSelf(lat, lng, acc) {
-  if (!map) return;
-  var ll = [lat, lng];
-  if (!selfMarker) {
-    selfMarker = L.circleMarker(ll, { radius: 7, color: '#fff', weight: 2, fillColor: '#1e88e5', fillOpacity: 1 }).addTo(map);
-    accCircle = L.circle(ll, { radius: acc, weight: 1, color: '#1e88e5', fillOpacity: 0.1 }).addTo(map);
-    map.setView(ll, 17);
-  } else {
-    selfMarker.setLatLng(ll);
-    accCircle.setLatLng(ll);
-    accCircle.setRadius(acc);
-    if (follow) map.panTo(ll);
-  }
-  track.addLatLng(ll);
-}
-
-function recenter() {
-  follow = true;
-  if (map && selfMarker) map.setView(selfMarker.getLatLng(), Math.max(map.getZoom(), 16));
-}
-
-function clearTrack() {
-  if (track) track.setLatLngs([]);
-}
-
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener("DOMContentLoaded", init);
 </script>
 </body>
 </html>
