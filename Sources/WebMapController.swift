@@ -45,6 +45,10 @@ final class WebMapController: NSObject, ObservableObject, WKScriptMessageHandler
         webView.evaluateJavaScript("clearTrack()", completionHandler: nil)
     }
 
+    func clearMarks() {
+        webView.evaluateJavaScript("clearMarks()", completionHandler: nil)
+    }
+
     // MARK: - WKScriptMessageHandler
 
     func userContentController(_ userContentController: WKUserContentController,
@@ -59,10 +63,13 @@ final class WebMapController: NSObject, ObservableObject, WKScriptMessageHandler
                 pending = nil
                 push(p)
             }
-        case "mark":
-            let lat = (body["lat"] as? Double) ?? 0
-            let lng = (body["lng"] as? Double) ?? 0
-            AppLog.shared.add("MAP", String(format: "JS→原生 标记: %.6f, %.6f", lat, lng))
+        case "speak":
+            // 页面里的游戏事件（中弹、阵亡、拾取空投等）交给原生语音播报
+            if let text = body["text"] as? String { SpeechService.shared.speak(text) }
+        case "log":
+            if let text = body["text"] as? String { AppLog.shared.add("GAME", text) }
+        case "unmark":
+            AppLog.shared.add("MAP", "JS→原生 删除了一个标记")
         case "error":
             AppLog.shared.add("MAP", "错误: \(body["text"] as? String ?? "")")
         default:
