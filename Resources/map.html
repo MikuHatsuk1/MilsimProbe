@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body, #map { height: 100%; margin: 0; padding: 0; }
+  .msg { padding: 16px; font-family: -apple-system, sans-serif; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+var map = null, selfMarker = null, accCircle = null, track = null, follow = true;
+
+function post(msg) {
+  try { window.webkit.messageHandlers.native.postMessage(msg); } catch (e) {}
+}
+
+function init() {
+  if (typeof L === 'undefined') {
+    document.body.innerHTML = '<p class="msg">地图库加载失败，请检查网络后重开 App。</p>';
+    post({ type: 'error', text: 'Leaflet 加载失败（网络问题？）' });
+    return;
+  }
+  map = L.map('map', { zoomControl: true }).setView([1.3521, 103.8198], 12);
+
+  var street = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 20, subdomains: 'abcd',
+    attribution: '&copy; OpenStreetMap &copy; CARTO'
+  }).addTo(map);
+  var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, attribution: '&copy; Esri'
+  });
+  L.control.layers({ '街道': street, '卫星': sat }).addTo(map);
+
+  track = L.polyline([], { color: '#e53935', weight: 3 }).addTo(map);
+
+  map.on('dragstart', function () { follow = false; });
+  map.on('click', function (e) {
+    L.marker(e.latlng).addTo(map)
+      .bindPopup('标记 ' + e.latlng.lat.toFixed(5) + ', ' + e.latlng.lng.toFixed(5))
+      .openPopup();
+    post({ type: 'mark', lat: e.latlng.lat, lng: e.latlng.lng });
+  });
+
+  post({ type: 'ready' });
+}
+
+// 原生 → JS：更新自己的位置
+function updateSelf(lat, lng, acc) {
+  if (!map) return;
+  var ll = [lat, lng];
+  if (!selfMarker) {
+    selfMarker = L.circleMarker(ll, { radius: 7, color: '#fff', weight: 2, fillColor: '#1e88e5', fillOpacity: 1 }).addTo(map);
+    accCircle = L.circle(ll, { radius: acc, weight: 1, color: '#1e88e5', fillOpacity: 0.1 }).addTo(map);
+    map.setView(ll, 17);
+  } else {
+    selfMarker.setLatLng(ll);
+    accCircle.setLatLng(ll);
+    accCircle.setRadius(acc);
+    if (follow) map.panTo(ll);
+  }
+  track.addLatLng(ll);
+}
+
+function recenter() {
+  follow = true;
+  if (map && selfMarker) map.setView(selfMarker.getLatLng(), Math.max(map.getZoom(), 16));
+}
+
+function clearTrack() {
+  if (track) track.setLatLngs([]);
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

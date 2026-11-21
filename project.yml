@@ -1,0 +1,38 @@
+name: MilsimProbe
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  MilsimProbe:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.milsimprobe
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+    scheme: {}
+    info:
+      path: SupportFiles/Info.plist
+      properties:
+        CFBundleDisplayName: Milsim测试
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocationWhenInUseUsageDescription: 用于在地图上显示你的位置。
+        NSLocationAlwaysAndWhenInUseUsageDescription: 用于测试锁屏和后台时能否持续定位。
+        NSBluetoothAlwaysUsageDescription: 用于扫描和连接蓝牙外设（中弹感应器等）。
+        UIBackgroundModes:
+          - location
+          - bluetooth-central
+          - audio
